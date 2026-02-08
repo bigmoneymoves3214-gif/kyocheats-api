@@ -92,6 +92,44 @@ app.post('/api/orders', async (req, res) => {
 app.patch('/api/orders/:id', async (req, res) => {
   try {
     const updates = req.body;
+    const orderId = req.params.id;
+    
+    // If status is being set to 'paid', handle key delivery
+    if (updates.status === 'paid') {
+      // Get the order first
+      const orderResult = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+      if (orderResult.rows.length > 0) {
+        const order = orderResult.rows[0];
+        
+        // Only deliver key if not already delivered
+        if (!order.delivered_key) {
+          // Get the product
+          const productResult = await pool.query('SELECT * FROM products WHERE id = $1', [order.product_id]);
+          if (productResult.rows.length > 0) {
+            const product = productResult.rows[0];
+            const pricing = product.pricing || [];
+            
+            // Find the matching variant by duration
+            const variantIndex = pricing.findIndex(v => v.duration === order.duration);
+            if (variantIndex !== -1 && pricing[variantIndex].keys && pricing[variantIndex].keys.length > 0) {
+              // Get the first available key
+              const deliveredKey = pricing[variantIndex].keys.shift();
+              pricing[variantIndex].stock = pricing[variantIndex].keys.length;
+              
+              // Update the product's pricing
+              await pool.query('UPDATE products SET pricing = $1 WHERE id = $2', [JSON.stringify(pricing), order.product_id]);
+              
+              // Add the delivered key to the updates
+              updates.delivered_key = deliveredKey;
+              console.log(`Delivered key for order ${orderId}: ${deliveredKey.substring(0, 10)}...`);
+            } else {
+              console.log(`No keys available for order ${orderId}, product ${order.product_id}, duration ${order.duration}`);
+            }
+          }
+        }
+      }
+    }
+    
     const setClauses = [];
     const values = [];
     let i = 1;
@@ -101,7 +139,7 @@ app.patch('/api/orders/:id', async (req, res) => {
       values.push(value);
       i++;
     }
-    values.push(req.params.id);
+    values.push(orderId);
     
     const result = await pool.query(
       `UPDATE orders SET ${setClauses.join(', ')} WHERE id = $${i} RETURNING *`,
