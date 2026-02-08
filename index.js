@@ -136,7 +136,12 @@ app.patch('/api/orders/:id', async (req, res) => {
     
     for (const [key, value] of Object.entries(updates)) {
       setClauses.push(`${key} = $${i}`);
-      values.push(value);
+      // Stringify objects for text columns (like feedback)
+      if (typeof value === 'object' && value !== null) {
+        values.push(JSON.stringify(value));
+      } else {
+        values.push(value);
+      }
       i++;
     }
     values.push(orderId);
