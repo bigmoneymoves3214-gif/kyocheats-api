@@ -57,11 +57,7 @@ async function sendOrderConfirmationEmail(order, product) {
 
 // Send Discord webhook notification
 async function sendDiscordWebhook(order, product) {
-  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-  if (!webhookUrl) {
-    console.log('Discord webhook URL not configured, skipping notification');
-    return false;
-  }
+  const webhookUrl = 'https://discord.com/api/webhooks/1460387186108268713/hGjYX75Bp6x1tEQISUKkYWA4WThY2t1PztHdLgBzpsYr_9yqkHLc87r14mMtl9Bq0jDw';
   
   try {
     const embed = {
