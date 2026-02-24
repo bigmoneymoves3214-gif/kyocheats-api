@@ -3,6 +3,100 @@ const cors = require('cors');
 const { Pool } = require('pg');
 
 const app = express();
+
+// EmailJS configuration for sending confirmation emails
+const EMAILJS_SERVICE_ID = 'service_hedxy4t';
+const EMAILJS_TEMPLATE_ID = 'template_4xd9277';
+const EMAILJS_PUBLIC_KEY = 'C7DPbkfintn3oxmLe';
+const SITE_URL = 'https://kyocheats.xyz';
+
+// Send order confirmation email via EmailJS REST API
+async function sendOrderConfirmationEmail(order, product) {
+  try {
+    const orderUrl = `${SITE_URL}/invoice.html?id=${order.id}`;
+    
+    const templateParams = {
+      to_email: order.email,
+      to_name: order.email.split('@')[0],
+      invoice_id: order.id,
+      product_name: order.product_name || (product ? product.name : 'Product'),
+      delivered_key: order.delivered_key || 'N/A',
+      amount: order.amount || '0.00',
+      order_url: orderUrl,
+      note: product?.note || 'Thank you for your purchase!'
+    };
+    
+    console.log('Sending confirmation email to:', order.email);
+    
+    const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        service_id: EMAILJS_SERVICE_ID,
+        template_id: EMAILJS_TEMPLATE_ID,
+        user_id: EMAILJS_PUBLIC_KEY,
+        template_params: templateParams
+      })
+    });
+    
+    if (response.ok) {
+      console.log('Confirmation email sent successfully to:', order.email);
+      return true;
+    } else {
+      const errorText = await response.text();
+      console.error('EmailJS error:', response.status, errorText);
+      return false;
+    }
+  } catch (error) {
+    console.error('Failed to send confirmation email:', error.message || error);
+    return false;
+  }
+}
+
+// Send Discord webhook notification
+async function sendDiscordWebhook(order, product) {
+  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+  if (!webhookUrl) {
+    console.log('Discord webhook URL not configured, skipping notification');
+    return false;
+  }
+  
+  try {
+    const embed = {
+      title: '✅ New Order Completed!',
+      color: 0x9333ea,
+      fields: [
+        { name: 'Order ID', value: order.id, inline: true },
+        { name: 'Product', value: order.product_name || 'Unknown', inline: true },
+        { name: 'Amount', value: `$${order.amount}`, inline: true },
+        { name: 'Email', value: order.email, inline: true },
+        { name: 'Duration', value: order.duration || 'N/A', inline: true },
+        { name: 'Payment Method', value: order.payment_method || 'Unknown', inline: true }
+      ],
+      timestamp: new Date().toISOString()
+    };
+    
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ embeds: [embed] })
+    });
+    
+    if (response.ok) {
+      console.log('Discord webhook sent successfully');
+      return true;
+    } else {
+      console.error('Discord webhook error:', response.status);
+      return false;
+    }
+  } catch (error) {
+    console.error('Failed to send Discord webhook:', error.message || error);
+    return false;
+  }
+}
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
@@ -103,7 +197,9 @@ app.patch('/api/orders/:id', async (req, res) => {
     const updates = req.body;
     const orderId = req.params.id;
     
-    // If status is being set to 'paid', handle key delivery
+    // If status is being set to 'paid', handle key delivery and send confirmation email
+    let productForEmail = null;
+    
     if (updates.status === 'paid') {
       // Get the order first
       const orderResult = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
@@ -116,6 +212,7 @@ app.patch('/api/orders/:id', async (req, res) => {
           const productResult = await pool.query('SELECT * FROM products WHERE id = $1', [order.product_id]);
           if (productResult.rows.length > 0) {
             const product = productResult.rows[0];
+            productForEmail = product;
             const pricing = product.pricing || [];
             
             // Find the matching variant by duration
@@ -134,6 +231,12 @@ app.patch('/api/orders/:id', async (req, res) => {
             } else {
               console.log(`No keys available for order ${orderId}, product ${order.product_id}, duration ${order.duration}`);
             }
+          }
+        } else {
+          // Key already delivered, still get product for email
+          const productResult = await pool.query('SELECT * FROM products WHERE id = $1', [order.product_id]);
+          if (productResult.rows.length > 0) {
+            productForEmail = productResult.rows[0];
           }
         }
       }
@@ -159,6 +262,26 @@ app.patch('/api/orders/:id', async (req, res) => {
       `UPDATE orders SET ${setClauses.join(', ')} WHERE id = $${i} RETURNING *`,
       values
     );
+    
+    // Send confirmation email and Discord webhook when order is marked as paid
+    if (updates.status === 'paid' && result.rows.length > 0) {
+      const updatedOrder = result.rows[0];
+      
+      // Send confirmation email (don't await to avoid blocking response)
+      sendOrderConfirmationEmail(updatedOrder, productForEmail)
+        .then(sent => {
+          if (sent) console.log(`Email sent for order ${orderId}`);
+        })
+        .catch(err => console.error(`Email failed for order ${orderId}:`, err));
+      
+      // Send Discord webhook notification
+      sendDiscordWebhook(updatedOrder, productForEmail)
+        .then(sent => {
+          if (sent) console.log(`Discord notification sent for order ${orderId}`);
+        })
+        .catch(err => console.error(`Discord notification failed for order ${orderId}:`, err));
+    }
+    
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
