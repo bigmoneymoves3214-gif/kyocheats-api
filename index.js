@@ -55,11 +55,24 @@ async function sendOrderConfirmationEmail(order, product) {
   }
 }
 
-// Send Discord webhook notification
-async function sendDiscordWebhook(order, product) {
-  const webhookUrl = 'https://discord.com/api/webhooks/1460387186108268713/hGjYX75Bp6x1tEQISUKkYWA4WThY2t1PztHdLgBzpsYr_9yqkHLc87r14mMtl9Bq0jDw';
-  
+// Send Discord webhook notification (fetches URL from settings table)
+async function sendDiscordWebhook(order, product, pool) {
   try {
+    // Fetch webhook URL from settings table
+    const settingsResult = await pool.query('SELECT * FROM settings WHERE id = 1');
+    if (settingsResult.rows.length === 0) {
+      console.log('No settings found, skipping Discord webhook');
+      return false;
+    }
+    
+    const settings = settingsResult.rows[0].data;
+    const webhookUrl = settings?.discordWebhook;
+    
+    if (!webhookUrl) {
+      console.log('Discord webhook URL not configured in settings, skipping notification');
+      return false;
+    }
+    
     const embed = {
       title: '✅ New Order Completed!',
       color: 0x9333ea,
@@ -271,7 +284,7 @@ app.patch('/api/orders/:id', async (req, res) => {
         .catch(err => console.error(`Email failed for order ${orderId}:`, err));
       
       // Send Discord webhook notification
-      sendDiscordWebhook(updatedOrder, productForEmail)
+      sendDiscordWebhook(updatedOrder, productForEmail, pool)
         .then(sent => {
           if (sent) console.log(`Discord notification sent for order ${orderId}`);
         })
